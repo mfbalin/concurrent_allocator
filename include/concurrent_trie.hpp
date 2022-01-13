@@ -75,7 +75,9 @@ public:
 		auto level_granularity = chunk_size;
 		auto count_granularity = level_granularity >> chunk_bits;
 		for(int d = maxDepth; d >= 0; d--) {
-			for(T i = 0; (i + 1) * level_granularity < N; i++) {
+			const auto i_end = (N + (level_granularity - 1)) / level_granularity - 1;
+			#pragma omp parallel for
+			for(T i = 0; i < i_end; i++) {
 				auto s = level_start + i;
 				chunks[s].store({allset, 0});
 				if constexpr(chunked)
