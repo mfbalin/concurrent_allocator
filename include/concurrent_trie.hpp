@@ -49,11 +49,11 @@ private:
 		T operator ()(T &bits) { // if t has only 1 bit set, then next time will be empty
 			int offset;
 			{
-				chunk n = std::atomic_ref(trie->chunks[s]).load();
+				chunk n = std::atomic_ref(trie->chunks[s]).load(std::memory_order_relaxed);
 				do {
 					offset = std::countr_zero(n.bits);
 					assert(offset >= 0); // after the changes, this should hold!
-				} while(!std::atomic_ref(trie->chunks[s]).compare_exchange_weak(n, n.cleared_copy(offset)));
+				} while(!std::atomic_ref(trie->chunks[s]).compare_exchange_weak(n, n.cleared_copy(offset), std::memory_order_relaxed));
 				bits = n.bits;
 			}
 			auto i = s - trie->num_internal_nodes;
@@ -102,51 +102,51 @@ public:
 	void push(T i) {//first | then increment size
 		auto offset = i & chunk_mask;
 		auto s = num_internal_nodes + (i >> chunk_bits);
-		chunk n = std::atomic_ref(chunks[s]).load();
-		while(!std::atomic_ref(chunks[s]).compare_exchange_weak(n, n.set_copy(offset)));
+		chunk n = std::atomic_ref(chunks[s]).load(std::memory_order_relaxed);
+		while(!std::atomic_ref(chunks[s]).compare_exchange_weak(n, n.set_copy(offset), std::memory_order_relaxed));
 		bool flag;
 		if constexpr(chunked)
 			flag = n.bits == 0;
 		else
 			flag = (n.bits & (one << offset)) == 0;
 		if(flag) {
-			std::atomic_ref(sizes[s])++;
+			std::atomic_ref(sizes[s]).fetch_add(1, std::memory_order_release);
 			for(int d = maxDepth - 1; d >= 0; d--) {
 				s = getParent(s);
 				i >>= chunk_bits;
 				offset = i & chunk_mask;
-				n = std::atomic_ref(chunks[s]).load();
-				while(!std::atomic_ref(chunks[s]).compare_exchange_weak(n, n.set_copy(offset)));
-				std::atomic_ref(sizes[s])++;
+				n = std::atomic_ref(chunks[s]).load(std::memory_order_relaxed);
+				while(!std::atomic_ref(chunks[s]).compare_exchange_weak(n, n.set_copy(offset), std::memory_order_relaxed));
+				std::atomic_ref(sizes[s]).fetch_add(1, std::memory_order_release);
 			}
 		}
 	}
 	auto pop(T &sz) { // first decrement size at root, first decrement lower level size then & on current level
 		T s = 0;
 		if(maxDepth >= 0) {
-			sz = std::atomic_ref(sizes[0]).load();
+			sz = std::atomic_ref(sizes[0]).load(std::memory_order_acquire);
 			do {
 				if(sz == 0)
 					break;
-			} while(!std::atomic_ref(sizes[0]).compare_exchange_weak(sz, sz - 1));
+			} while(!std::atomic_ref(sizes[0]).compare_exchange_weak(sz, sz - 1, std::memory_order_acquire, std::memory_order_relaxed));
 			if(sz > 0) { // guaranteed to take one chunk by induction hypothesis
 				T child;
 				for(int d = 0; d < maxDepth; d++) {
 					int offset;
 					T child_sz;
-					auto n = std::atomic_ref(chunks[s]).load();
+					auto n = std::atomic_ref(chunks[s]).load(std::memory_order_relaxed);
 					for(;;) {
 						offset = std::countr_zero(n.bits);
 						assert(offset >= 0);
 						child = getChild(s, offset);
-						child_sz = std::atomic_ref(sizes[child]).load();
+						child_sz = std::atomic_ref(sizes[child]).load(std::memory_order_relaxed);
 						do {
 							if(child_sz == 0)
 								break;
-						} while(!std::atomic_ref(sizes[child]).compare_exchange_weak(child_sz, child_sz - 1));
+						} while(!std::atomic_ref(sizes[child]).compare_exchange_weak(child_sz, child_sz - 1, std::memory_order_acquire, std::memory_order_relaxed));
 						if(child_sz >= 1)	// expect this to hold sooner or later because of inductive hypothesis
 							break;
-						std::atomic_ref(chunks[s]).compare_exchange_weak(n, n.cleared_copy(offset));
+						std::atomic_ref(chunks[s]).compare_exchange_weak(n, n.cleared_copy(offset), std::memory_order_relaxed);
 					}
 					s = child;
 				}
