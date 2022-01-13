@@ -64,10 +64,10 @@ private:
 	};
 public:
 	concurrent_trie() {}
-	T getChild(T i, T c) {
+	inline T getChild(T i, T c) {
 		return (i << chunk_bits) + c + 1;
 	}
-	T getParent(T i) {
+	inline T getParent(T i) {
 		return (i - 1) >> chunk_bits;
 	}
 	concurrent_trie(T N) : N(N), maxDepth(N > 1 ? (chunk_size - std::countl_zero(N - 1) - 1) / chunk_bits : -1 + N), num_internal_nodes(maxDepth >= 0 ? ((one << (maxDepth * chunk_bits)) - 1) / (chunk_size - 1) : 0), chunks(num_internal_nodes + (N + chunk_size - 1) / chunk_size), sizes(chunks.size()) {
