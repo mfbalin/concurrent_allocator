@@ -23,11 +23,8 @@ private:
 	struct chunk {
 		T bits;
 		T version;
-		chunk same_copy() const {
-			return {bits, version + 1};
-		}
 		chunk cleared_copy(int offset) const {
-			return {bits & ~(one << offset), version + 1};
+			return {bits & ~(one << offset), version + 1}; // is version increment really necessary here?
 		}
 		chunk set_copy(int offset) const {
 			return {bits | (one << offset), version + 1};
