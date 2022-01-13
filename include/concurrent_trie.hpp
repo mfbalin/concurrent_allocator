@@ -18,6 +18,8 @@ public:
 	static constexpr T chunk_bits = std::countr_zero(chunk_size);
 	static constexpr T allset = ~(T)0;
 	static constexpr T one = 1;
+	T N = 0;
+private:
 	struct chunk {
 		T bits;
 		T version;
@@ -31,14 +33,12 @@ public:
 			return {bits | (one << offset), version + 1};
 		}
 	};
-	T N = 0;
-private:
 	int maxDepth = -1;
 	T num_internal_nodes = 0;
 	static_assert(std::atomic<chunk>::is_always_lock_free);
-	std::vector<std::atomic<chunk>> chunks;
+	std::vector<chunk> chunks;
 	static_assert(std::atomic<T>::is_always_lock_free);
-	std::vector<std::atomic<T>> sizes;
+	std::vector<T> sizes;
 	
 	class popper {
 		concurrent_trie *trie;
@@ -49,11 +49,11 @@ private:
 		T operator ()(T &bits) { // if t has only 1 bit set, then next time will be empty
 			int offset;
 			{
-				chunk n = trie->chunks[s].load();
+				chunk n = std::atomic_ref(trie->chunks[s]).load();
 				do {
 					offset = std::countr_zero(n.bits);
 					assert(offset >= 0); // after the changes, this should hold!
-				} while(!trie->chunks[s].compare_exchange_weak(n, n.cleared_copy(offset)));
+				} while(!std::atomic_ref(trie->chunks[s]).compare_exchange_weak(n, n.cleared_copy(offset)));
 				bits = n.bits;
 			}
 			auto i = s - trie->num_internal_nodes;
@@ -79,21 +79,21 @@ public:
 			#pragma omp parallel for
 			for(T i = 0; i < i_end; i++) {
 				auto s = level_start + i;
-				chunks[s].store({allset, 0});
+				chunks[s] = chunk{allset, 0};
 				if constexpr(chunked)
-					sizes[s].store(count_granularity);
+					sizes[s] = count_granularity;
 				else
-					sizes[s].store(level_granularity);
+					sizes[s] = level_granularity;
 			}
 			auto i = (N - 1) / level_granularity;
 			auto s = level_start + i;
 			auto N_ = N - i * level_granularity;
 			auto sz = (N_ + count_granularity - 1) / count_granularity;
-			chunks[s].store({allset >> (chunk_size - sz), 0});
+			chunks[s] = chunk{allset >> (chunk_size - sz), 0};
 			if constexpr(chunked)
-				sizes[s].store((N_ + chunk_size - 1) >> chunk_bits);
+				sizes[s] = (N_ + chunk_size - 1) >> chunk_bits;
 			else
-				sizes[s].store(N_);
+				sizes[s] = N_;
 			count_granularity = level_granularity;
 			level_granularity <<= chunk_bits;
 			level_start = getParent(level_start);
@@ -102,51 +102,51 @@ public:
 	void push(T i) {//first | then increment size
 		auto offset = i & chunk_mask;
 		auto s = num_internal_nodes + (i >> chunk_bits);
-		chunk n = chunks[s].load();
-		while(!chunks[s].compare_exchange_weak(n, n.set_copy(offset)));
+		chunk n = std::atomic_ref(chunks[s]).load();
+		while(!std::atomic_ref(chunks[s]).compare_exchange_weak(n, n.set_copy(offset)));
 		bool flag;
 		if constexpr(chunked)
 			flag = n.bits == 0;
 		else
 			flag = (n.bits & (one << offset)) == 0;
 		if(flag) {
-			sizes[s]++;
+			std::atomic_ref(sizes[s])++;
 			for(int d = maxDepth - 1; d >= 0; d--) {
 				s = getParent(s);
 				i >>= chunk_bits;
 				offset = i & chunk_mask;
-				n = chunks[s].load();
-				while(!chunks[s].compare_exchange_weak(n, n.set_copy(offset)));
-				sizes[s]++;
+				n = std::atomic_ref(chunks[s]).load();
+				while(!std::atomic_ref(chunks[s]).compare_exchange_weak(n, n.set_copy(offset)));
+				std::atomic_ref(sizes[s])++;
 			}
 		}
 	}
 	auto pop(T &sz) { // first decrement size at root, first decrement lower level size then & on current level
 		T s = 0;
 		if(maxDepth >= 0) {
-			sz = sizes[0].load();
+			sz = std::atomic_ref(sizes[0]).load();
 			do {
 				if(sz == 0)
 					break;
-			} while(!sizes[0].compare_exchange_weak(sz, sz - 1));
+			} while(!std::atomic_ref(sizes[0]).compare_exchange_weak(sz, sz - 1));
 			if(sz > 0) { // guaranteed to take one chunk by induction hypothesis
 				T child;
 				for(int d = 0; d < maxDepth; d++) {
 					int offset;
 					T child_sz;
-					auto n = chunks[s].load();
+					auto n = std::atomic_ref(chunks[s]).load();
 					for(;;) {
 						offset = std::countr_zero(n.bits);
 						assert(offset >= 0);
 						child = getChild(s, offset);
-						child_sz = sizes[child].load();
+						child_sz = std::atomic_ref(sizes[child]).load();
 						do {
 							if(child_sz == 0)
 								break;
-						} while(!sizes[child].compare_exchange_weak(child_sz, child_sz - 1));
+						} while(!std::atomic_ref(sizes[child]).compare_exchange_weak(child_sz, child_sz - 1));
 						if(child_sz >= 1)	// expect this to hold sooner or later because of inductive hypothesis
 							break;
-						chunks[s].compare_exchange_weak(n, n.cleared_copy(offset));
+						std::atomic_ref(chunks[s]).compare_exchange_weak(n, n.cleared_copy(offset));
 					}
 					s = child;
 				}
