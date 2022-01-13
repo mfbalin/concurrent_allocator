@@ -23,10 +23,13 @@ int main(int argc, char *argv[]) {
         std::vector<int *> v;
         for (std::size_t i = 0; i < size; i++) {
             v.push_back(local_allocator.allocate());
+            // v.push_back(new int{});
             if (!v.back())
                 break;
             local_allocator.deallocate(v.back());
+            // delete v.back();
             v.push_back(local_allocator.allocate());
+            // v.push_back(new int{});
             if (!v.back())
                 break;
             total_count.fetch_add(1, std::memory_order_relaxed);
